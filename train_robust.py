@@ -1,7 +1,7 @@
 import torch
 from torch import nn
 from models import SAINT, SAINT_vision
-
+import pandas as pd
 from data_openml import data_prep_openml,task_dset_ids,DataSetCatCon
 import argparse
 from torch.utils.data import DataLoader
@@ -14,9 +14,9 @@ import os
 import numpy as np
 parser = argparse.ArgumentParser()
 
-parser.add_argument('--dset_id', required=True, type=int)
+
 parser.add_argument('--vision_dset', action = 'store_true')
-parser.add_argument('--task', required=True, type=str,choices = ['binary','multiclass','regression'])
+parser.add_argument('--task', default="regression")
 parser.add_argument('--cont_embeddings', default='MLP', type=str,choices = ['MLP','Noemb','pos_singleMLP'])
 parser.add_argument('--embedding_size', default=32, type=int)
 parser.add_argument('--transformer_depth', default=6, type=int)
@@ -59,7 +59,7 @@ parser.add_argument('--final_mlp_style', default='sep', type=str,choices = ['com
 
 
 opt = parser.parse_args()
-modelsave_path = os.path.join(os.getcwd(),opt.savemodelroot,opt.task,str(opt.dset_id),opt.run_name)
+modelsave_path = "/"
 if opt.task == 'regression':
     opt.dtask = 'reg'
 else:
@@ -84,11 +84,23 @@ if opt.active_log:
 
 
 print('Downloading and processing the dataset, it might take some time.')
-cat_dims, cat_idxs, con_idxs, X_train, y_train, X_valid, y_valid, X_test, y_test, train_mean, train_std = data_prep_openml(opt.dset_id, opt.dset_seed,opt.task, datasplit=[.65, .15, .2])
-continuous_mean_std = np.array([train_mean,train_std]).astype(np.float32) 
+
+data="/Users/jose/Downloads/train.csv"
+data=pd.read_csv(data).drop(columns=["row_id","time_id"])
+X_train,X_valid,X_test=data[data.date_id<420],data[data.date_id>420],data[data.date_id>420]
+y_train,y_valid,y_test=X_train[["target"]].values,X_valid[["target"]].values,X_test[["target"]].values
+
+drop_did=lambda df: df.drop(columns=["date_id"])
+X_train,X_valid,X_test=drop_did(X_train).values,drop_did(X_valid).values,drop_did(X_test).values
+# train_mean, train_std
+cat_dims=200
+cat_idxs=[0]
+con_idxs=[i for i in range(1,X_train.shape[1])]
+# cat_dims, cat_idxs, con_idxs, X_train, y_train, X_valid, y_valid, X_test, y_test, train_mean, train_std = data_prep_openml(opt.dset_id, opt.dset_seed,opt.task, datasplit=[.65, .15, .2])
+# continuous_mean_std = np.array([train_mean,train_std]).astype(np.float32)
 
 ##### Setting some hyperparams based on inputs and dataset
-_,nfeat = X_train['data'].shape
+nfeat = X_train.shape[1]
 if nfeat > 100:
     opt.embedding_size = min(4,opt.embedding_size)
     opt.batchsize = min(64, opt.batchsize)
@@ -103,23 +115,20 @@ if opt.attentiontype != 'col':
     else:
         opt.ff_dropout = 0.8
 
-if opt.dset_id in [41540, 42729, 42728]:
-    opt.batchsize = 2048
 
-if opt.dset_id == 42734 :
-    opt.batchsize = 255
+opt.batchsize = 2048
+
 print(nfeat,opt.batchsize)
 print(opt)
 
 
-
-train_ds = DataSetCatCon(X_train, y_train, cat_idxs,opt.dtask,continuous_mean_std)
+train_ds=torch.utils.data.TensorDataset(torch.tensor(X_train), torch.tensor((y_train)))
 trainloader = DataLoader(train_ds, batch_size=opt.batchsize, shuffle=True,num_workers=4)
 
-valid_ds = DataSetCatCon(X_valid, y_valid, cat_idxs,opt.dtask, continuous_mean_std)
+valid_ds=torch.utils.data.TensorDataset(torch.tensor(X_valid), torch.tensor((y_valid)))
 validloader = DataLoader(valid_ds, batch_size=opt.batchsize, shuffle=False,num_workers=4)
 
-test_ds = DataSetCatCon(X_test, y_test, cat_idxs,opt.dtask, continuous_mean_std)
+test_ds=torch.utils.data.TensorDataset(torch.tensor(X_test), torch.tensor((y_test)))
 testloader = DataLoader(test_ds, batch_size=opt.batchsize, shuffle=False,num_workers=4)
 if opt.task == 'regression':
     y_dim = 1
@@ -139,7 +148,7 @@ depth = opt.transformer_depth,
 heads = opt.attention_heads,                         
 attn_dropout = opt.attention_dropout,             
 ff_dropout = opt.ff_dropout,                  
-mlp_hidden_mults = (4, 2),       
+mlp_hidden_mults = (4, 2),    #
 cont_embeddings = opt.cont_embeddings,
 attentiontype = opt.attentiontype,
 final_mlp_style = opt.final_mlp_style,
